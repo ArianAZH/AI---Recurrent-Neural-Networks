@@ -14,6 +14,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error ,r2_score
 import matplotlib.pyplot as plt
 import time
 import keras_tuner as kt
+
 #a
 # uploading data
 cols = ['unit_number', 'time_in_cycles'] + \
@@ -51,13 +52,13 @@ max_cycles['total_life'] = max_cycles['max_cycle'] + max_cycles['true_RUL']
 test_df = test_df.merge(max_cycles[['unit_number', 'total_life']], on='unit_number')
 test_df['RUL'] = test_df['total_life'] - test_df['time_in_cycles']
 
-# ----------- 3. انتخاب ویژگی‌های مفید با حذف واریانس پایین -----------
+
 sensor_cols = [col for col in train_df.columns if "sensor" in col]
 selector = VarianceThreshold(threshold=0.01)
 selector.fit(train_df[sensor_cols])
 useful_sensor_cols = list(selector.get_feature_names_out(sensor_cols))
 
-# حذف ویژگی‌های تکراری بر اساس همبستگی بالا (بیش از 0.98)
+
 corr_matrix = train_df[useful_sensor_cols].corr().abs()
 upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
 to_drop = [col for col in upper.columns if any(upper[col] > 0.98)]
@@ -78,7 +79,7 @@ low_importance_features = importances[importances < 0.01].index.tolist()
 selected_features = [col for col in final_sensor_cols if col not in low_importance_features]
 train_df = train_df[selected_features + ['RUL', 'unit_number', 'time_in_cycles']]
 
-# ----------- 4. نرمال‌سازی ویژگی‌ها -----------
+
 scaler = MinMaxScaler()
 train_df_scaled = train_df.copy()
 train_df_scaled[selected_features] = scaler.fit_transform(train_df[selected_features])
@@ -89,7 +90,8 @@ test_df_scaled[selected_features] = scaler.transform(test_df[selected_features])
 unique_units = train_df_scaled['unit_number'].unique()
 train_units = unique_units[:int(0.7 * len(unique_units))]
 val_units = unique_units[int(0.7 * len(unique_units)):]
-# ----------- 6. آماده‌سازی داده‌ها با Sliding Window -----------
+
+
 def prepare_windows(data, window_size=30):
     X, y = [], []
     for unit in data['unit_number'].unique():
@@ -104,16 +106,16 @@ def prepare_windows(data, window_size=30):
 X, y = prepare_windows(train_df_scaled, window_size=30)
 X_test, y_test = prepare_windows(test_df_scaled)
 
-# ----------- 7. تقسیم داده‌ها برای مدل LSTM -----------
+
 X_train, y_train = prepare_windows(train_df_scaled[train_df_scaled['unit_number'].isin(train_units)])
 X_val, y_val = prepare_windows(train_df_scaled[train_df_scaled['unit_number'].isin(val_units)])
 
-# ----------- 5. محدود کردن RUL به 130 -----------
-max_rul = 130  ###
+
+max_rul = 130  
 train_df['RUL'] = train_df['RUL'].clip(upper=max_rul)
 test_df['RUL'] = test_df['RUL'].clip(upper=max_rul)
 
-# ----------- 8. آماده‌سازی داده‌ها برای مدل Dense -----------
+
 model_cnn = Sequential([
     Conv1D(filters=64, kernel_size=3, activation='relu', padding='same', input_shape=(X.shape[1], X.shape[2])),
     MaxPooling1D(pool_size=2),
@@ -126,7 +128,7 @@ model_cnn = Sequential([
 
 model_cnn.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
 
-early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+early_stop_cnn = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
 start_time_cnn = time.time()
 history_cnn = model_cnn.fit(
@@ -134,7 +136,7 @@ history_cnn = model_cnn.fit(
     validation_data=(X_val, y_val),
     epochs=100,
     batch_size=64,
-    callbacks=[early_stop],
+    callbacks=[early_stop_cnn],
     verbose=1
 )
 train_time_cnn = time.time() - start_time_cnn
@@ -149,7 +151,7 @@ print(f"MAE: {mae:.2f}")
 print(f"RMSE: {rmse:.2f}")
 print(f"log-RMSE: {log_rmse:.2f}")
 
-# ----------- 9. تعریف و آموزش مدل LSTM -----------
+
 model_lstm = Sequential([
     LSTM(100, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
     Dropout(0.2),
@@ -163,7 +165,8 @@ model_lstm.compile(
     loss='mse',
     metrics=['mae']
 )
-early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+
+early_stop_lstm = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
 start_time_lstm = time.time()
 history_lstm = model_lstm.fit(
@@ -171,11 +174,11 @@ history_lstm = model_lstm.fit(
     validation_data=(X_val, y_val),
     epochs=100,
     batch_size=64,
-    callbacks=[early_stop],
+    callbacks=[early_stop_lstm],
     verbose=1
 )
-
 train_time_lstm = time.time() - start_time_lstm
+
 
 y_pred_lstm = model_lstm.predict(X_test).flatten()
 
@@ -262,7 +265,7 @@ tuner_cnn.search(
     X_train, y_train,
     epochs=50,
     validation_data=(X_val, y_val),
-    batch_size=64,  # مقدار ثابت برای batch size
+    batch_size=64,  
     callbacks=[tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=5)],
     verbose=1
 )
@@ -270,7 +273,7 @@ tuner_cnn.search(
 tuner = kt.RandomSearch(
     build_lstm_model,
     objective='val_loss',
-    max_trials=10,  # تعداد تنظیمات مختلف
+    max_trials=10, 
     executions_per_trial=1,
     directory='my_tuning',
     project_name='lstm_rul'
@@ -302,7 +305,7 @@ print(f"Learning Rate: {best_cnn_hps.get('learning_rate')}")
 best_model = tuner.get_best_models(num_models=1)[0]
 best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
-print("Best hyperparameters:")
+print("Best hyperparameters for LSTM:")
 print(f"LSTM Units 1: {best_hps.get('lstm_units1')}")
 print(f"LSTM Units 2: {best_hps.get('lstm_units2')}")
 print(f"Dropout1: {best_hps.get('dropout1')}")
@@ -313,14 +316,14 @@ print(f"Learning Rate: {best_hps.get('learning_rate')}")
 
 
 
-# ----------- 10. تعریف و آموزش مدل cnn lstm -----------
+
 model_cnn_lstm = Sequential([
     Conv1D(filters=64, kernel_size=3, activation='relu', padding='same', input_shape=(X.shape[1], X.shape[2])),
     MaxPooling1D(pool_size=2),
     LSTM(100, return_sequences=False),
     Dropout(0.3),
     Dense(64, activation='relu'),
-    Dense(1)  # خروجی RUL
+    Dense(1)  
 ])
 model_cnn_lstm.compile(
     optimizer=Adam(learning_rate=0.001),
@@ -328,7 +331,7 @@ model_cnn_lstm.compile(
     metrics=['mae']
 )
 
-early_stop = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
+early_stop_cnn_lstm = tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
 
 start_time_cnn_lstm = time.time()
 history_cnn_lstm = model_cnn_lstm.fit(
@@ -336,7 +339,7 @@ history_cnn_lstm = model_cnn_lstm.fit(
     validation_data=(X_val, y_val),
     epochs=100,
     batch_size=64,
-    callbacks=[early_stop],
+    callbacks=[early_stop_cnn_lstm],
     verbose=1
 )
 train_time_cnn_lstm = time.time() - start_time_cnn_lstm
@@ -350,6 +353,40 @@ log_rmse_cnn_lstm = np.sqrt(mean_squared_error(np.log1p(y_test), np.log1p(y_pred
 print(f"CNN-LSTM MAE: {mae_cnn_lstm:.2f}")
 print(f"CNN-LSTM RMSE: {rmse_cnn_lstm:.2f}")
 print(f"CNN-LSTM log-RMSE: {log_rmse_cnn_lstm:.2f}")
+
+model_lstm_cnn = Sequential([
+    LSTM(100, return_sequences=True, input_shape=(X.shape[1], X.shape[2])),
+    Conv1D(filters=64, kernel_size=3, activation='relu', padding='same'),
+    GlobalAveragePooling1D(),
+    Dropout(0.3),
+    Dense(64, activation='relu'),
+    Dense(1)
+])
+model_lstm_cnn.compile(optimizer=Adam(learning_rate=0.001), loss='mse', metrics=['mae'])
+
+start_time_lstm_cnn = time.time()
+history_lstm_cnn = model_lstm_cnn.fit(
+    X_train, y_train,
+    validation_data=(X_val, y_val),
+    epochs=100,
+    batch_size=64,
+    callbacks=[early_stop_cnn_lstm],
+    verbose=1
+)
+train_time_lstm_cnn = time.time() - start_time_lstm_cnn
+
+y_pred_lstm_cnn = model_lstm_cnn.predict(X_test).flatten()
+
+mae_lstm_cnn = mean_absolute_error(y_test, y_pred_lstm_cnn)
+rmse_lstm_cnn = np.sqrt(mean_squared_error(y_test, y_pred_lstm_cnn))
+log_rmse_lstm_cnn = np.sqrt(mean_squared_error(np.log1p(y_test), np.log1p(y_pred_lstm_cnn)))
+r2_lstm_cnn = r2_score(y_test, y_pred_lstm_cnn)
+
+
+print(f"LSTM-CNN MAE: {mae_lstm_cnn:.2f}")
+print(f"LSTM-CNN RMSE: {rmse_lstm_cnn:.2f}")
+print(f"LSTM-CNN log-RMSE: {log_rmse_lstm_cnn:.2f}")
+
 
 
 class AttentionLayer(Layer):
@@ -430,6 +467,7 @@ def plot_loss(history, model_name):
 plot_loss(history_cnn, "CNN")
 plot_loss(history_lstm, "LSTM")
 plot_loss(history_cnn_lstm, "CNN + LSTM")
+plot_loss(history_lstm_cnn, "LSTM + CNN")
 plot_loss(history_lstm_att, "LSTM + Attention")
 
 def plot_pred_vs_true(y_true, y_pred, model_name):
@@ -447,6 +485,7 @@ def plot_pred_vs_true(y_true, y_pred, model_name):
 plot_pred_vs_true(y_test, y_pred_cnn, "CNN")
 plot_pred_vs_true(y_test, y_pred_lstm, "LSTM")
 plot_pred_vs_true(y_test, y_pred_cnn_lstm, "CNN + LSTM")
+plot_pred_vs_true(y_test, y_pred_lstm_cnn, "LSTM + CNN")
 plot_pred_vs_true(y_test, y_pred_att, "LSTM + Attention")
 
 
@@ -463,11 +502,13 @@ def evaluate_model(y_true, y_pred, training_time):
         'Training Time (s)': training_time,
         'MAPE (%)': mape
     }
+
 results = []
 
 results.append({'Model': 'CNN', **evaluate_model(y_test, y_pred_cnn, train_time_cnn)})
 results.append({'Model': 'LSTM', **evaluate_model(y_test, y_pred_lstm, train_time_lstm)})
 results.append({'Model': 'CNN + LSTM', **evaluate_model(y_test, y_pred_cnn_lstm, train_time_cnn_lstm)})
+results.append({'Model': 'LSTM + CNN', **evaluate_model(y_test, y_pred_lstm_cnn, train_time_lstm_cnn)}) 
 results.append({'Model': 'LSTM + Attention', **evaluate_model(y_test, y_pred_att, train_time_lstm_att)})
 
 results_df = pd.DataFrame(results)
@@ -485,6 +526,7 @@ plt.figure(figsize=(8,5))
 plot_cumulative_error(y_test, y_pred_cnn, "CNN")
 plot_cumulative_error(y_test, y_pred_lstm, "LSTM")
 plot_cumulative_error(y_test, y_pred_cnn_lstm, "CNN + LSTM")
+plot_cumulative_error(y_test, y_pred_lstm_cnn, "LSTM + CNN")  
 plot_cumulative_error(y_test, y_pred_att, "LSTM + Attention")
 plt.xlabel("Absolute Error")
 plt.ylabel("Cumulative Proportion")
